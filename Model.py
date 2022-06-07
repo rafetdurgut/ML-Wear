@@ -1,15 +1,19 @@
+import csv
 import joblib
+from matplotlib import pyplot as plt
+import numpy as np
 import pandas as pd
 from pyparsing import col
 from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
+from sklearn.model_selection import GridSearchCV, train_test_split
 from sklearn.svm import SVR
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import  make_scorer, mean_absolute_error, mean_squared_error, r2_score
 from xgboost import XGBRegressor
+
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -25,6 +29,8 @@ def preprocess(data):
       standard_scaler.fit_transform(data),
       columns=data.columns
     )
+    return x_train_scaled
+
     minmax_scale = MinMaxScaler()
     x_train = pd.DataFrame(
       minmax_scale.fit_transform(x_train_scaled),
@@ -32,15 +38,23 @@ def preprocess(data):
     )
     return x_train
 
-
 #Model classification
 def create_grid_search(X,Y, model,metric):
     # Create a grid search based model
-    gs_model = GridSearchCV(estimator = model["model"], param_grid = model['parameters'],verbose = 2, scoring=metric, n_jobs = -1)
+    gs_model = GridSearchCV(estimator = model["model"], param_grid = model['parameters'], scoring=metric, n_jobs = -1,return_train_score=True)
     gs_model.fit(X.values,Y.values)
     return gs_model
 
-#SVR, RF, DT, MLP, GBM, XGBoost, ELM
+def write_cv_results(grid, regressor):
+    ## Results from grid search
+    mean_test = grid.cv_results_['mean_test_score']
+    mean_test_std = grid.cv_results_['std_test_score']
+    mean_train = grid.cv_results_['mean_train_score']
+    mean_train_std = grid.cv_results_['std_train_score']
+    
+    d = pd.concat([pd.DataFrame(grid.cv_results_["params"]),pd.DataFrame(zip(grid.cv_results_["mean_test_score"],grid.cv_results_["std_test_score"], grid.cv_results_["mean_train_score"], grid.cv_results_["std_train_score"]),  columns=["Test Accuracy","Test STD","Train Accuracy","Train STD"])],axis=1)
+    d.to_csv(f"results-{regressor}.csv")
+
 
 if __name__ == "__main__":
     model_names=['Support Vector', 'Random Forest', 'Decision Tree', 'Multi Layer Perceptron', 'Extreme Gradient Boosting',]
@@ -49,35 +63,37 @@ if __name__ == "__main__":
     data = preprocess(raw_data)
     X,Y = data.iloc[:,:-1],data.iloc[:,-1]
 
+    X_train, X_test, Y_train, Y_test = train_test_split(X,Y,random_state=0)
     #Scorer for grid search
     scorer = make_scorer(r2_score, greater_is_better = True)
 
     #Models definitions
     model_s = dict()
-    model_s['SVR']= { 'model':SVR(), 'parameters': [
-        {"kernel": ["rbf"], "gamma": [1e-3, 1e-4], "C": [1, 10, 100]},
-        {"kernel": ["linear"], "C": [1, 10, 100]},
-    ] }
+    model_s['SVR']= { 'model':SVR(), 'parameters': { 
+        "kernel": ["rbf","linear"], "gamma": [1e-3, 1e-4], "C": [1, 10, 100]
+        }
+    }
     model_s['RF']= { 'model':RandomForestRegressor(), 'parameters': {
         'max_features': [2, 3],
-        'min_samples_leaf': [3, 4, 5],
+        'min_samples_leaf': [1, 2, 3, 4, 5],
         'n_estimators': [10, 20, 50, 100]} }
 
     model_s['MLP'] = {'model': MLPRegressor(), 'parameters': {
         'hidden_layer_sizes': [(5,1),(10,1),(15,1), (5,2), (10,2), (15,2)],
         'activation': ['relu','tanh','logistic'],
         'alpha': [0.001, 0.01, 0.035, 0.1],
-        'max_iter':[5000]
+        'max_iter' : [10000]
     }}
+
     model_s['XGB'] = {'model':XGBRegressor(),'parameters': {
         'eta':[ 0.1, 0.2, 0.4, 0.6],
         'n_estimators': [10, 20, 50, 100]
         }}
+
     model_s['DT']= { 'model':DecisionTreeRegressor(), 'parameters' : {
-        "splitter":["best","random"],
-        "max_depth" : [1,5,7,10],
-        "min_samples_leaf":[1,2,5],
-        "min_weight_fraction_leaf":[0.1,0.2,0.5],
+        "criterion":["squared_error","absolute_error"],
+        "max_depth" : [1,2,4,8],
+        "min_samples_leaf":[1,2,3,4,5],
     }}
 
     #Definitions
@@ -96,8 +112,12 @@ if __name__ == "__main__":
     #model_performances
     performances = dict()
     for k,v in model_s.items():
-        model_performances[k] = create_grid_search(X,Y, v,metric=scorer)
-        y_true, predicts[k] = Y, model_performances[k].best_estimator_.predict(X)
+        cvmodel = create_grid_search(X_train,Y_train, v,metric=scorer)
+        write_cv_results(cvmodel, k)
+        filename = f"final-version-{k}.sav"
+        joblib.dump(cvmodel.best_estimator_, filename)
+        model_performances[k] = cvmodel
+        y_true, predicts[k] = Y_test, model_performances[k].best_estimator_.predict(X_test)
         for s,f in score_functions.items():
             if s == "MSE":
                 performances[k, s] = f(y_true,predicts[k],squared=False) 
@@ -105,7 +125,5 @@ if __name__ == "__main__":
                 performances[k, s] = f(y_true,predicts[k]) 
             print(performances[k, s])
         print(f"Best configuration of {k}: {model_performances[k].best_params_} ")
-        filename = f"final-version-{k}.sav"
-        joblib.dump(model_performances[k].best_estimator_, filename)
 
     print(performances)
