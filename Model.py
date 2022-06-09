@@ -47,11 +47,6 @@ def create_grid_search(X,Y, model,metric):
 
 def write_cv_results(grid, regressor):
     ## Results from grid search
-    mean_test = grid.cv_results_['mean_test_score']
-    mean_test_std = grid.cv_results_['std_test_score']
-    mean_train = grid.cv_results_['mean_train_score']
-    mean_train_std = grid.cv_results_['std_train_score']
-    
     d = pd.concat([pd.DataFrame(grid.cv_results_["params"]),pd.DataFrame(zip(grid.cv_results_["mean_test_score"],grid.cv_results_["std_test_score"], grid.cv_results_["mean_train_score"], grid.cv_results_["std_train_score"]),  columns=["Test Accuracy","Test STD","Train Accuracy","Train STD"])],axis=1)
     d.to_csv(f"results-{regressor}.csv")
 
